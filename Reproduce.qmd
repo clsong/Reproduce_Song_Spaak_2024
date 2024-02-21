@@ -643,7 +643,7 @@ Figure2_higher[[2]] + Figure2_higher[[1]] + Figure2_higher[[3]] +
 
 # Figure 3
 Simulate how changing proportions of lower- and higher-trophic species affect niche and fitness differences
-```{r}
+```{r message=F}
 #' Generate Interaction Matrix for Figure 3
 #'
 #' This function generates an interaction matrix for Figure 3.
@@ -729,8 +729,7 @@ df_Fig3 <- expand_grid(
   mutate(
     int_parameters = pmap(
       list(snum_basal, snum_predator, mean_alpha, efficiency, noise_level),
-      ~ generate_interaction_matrix_Fig3(..1, ..2, ..3, ..4, ..5),
-      .progress = T
+      ~ generate_interaction_matrix_Fig3(..1, ..2, ..3, ..4, ..5)
     )
   ) %>%
   unnest(int_parameters) %>%
@@ -923,7 +922,7 @@ for (season in c("S", "W")) {
 }
 ```
 Then compute the niche and fitness differences for the species
-```{python message = F}
+```{python message = F, warning=F}
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
