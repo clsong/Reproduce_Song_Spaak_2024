@@ -1,0 +1,1102 @@
+---
+title: "Reproduce Song & Spaak (2024)"
+subtitle: "Trophic Tug-of-War: Coexistence Mechanisms within and across Trophic Levels"
+author:
+  - name: Chuliang Song
+    affiliations:
+      - Princeton University
+      - University of California, Los Angeles
+    orcid: 0000-0001-7490-8626
+    email: clsong.ecology@gmail.com
+    url: https://clsong.com
+  - name:  Jürg Spaak
+    affiliations:
+      - Cornell University
+      - RPTU Kaiserslautern-Landau
+    orcid: 0000-0001-5157-9188
+    email: j.w.spaak@gmail.com
+    url: https://jwspaak.com/
+format: 
+  html:
+    toc: true
+    self-contained: true
+    template-partials:
+      - title-block.html
+    code-fold: true
+---
+
+This file aims to reproduce the main results in the paper _Multitrophic assembly: a perspective from modern coexistence theory_ by Song & Spaak.
+
+# Code preparation
+Load R pckages
+```{r output=F}
+# 'tidyverse' is a collection of R packages designed for data science. It includes packages like ggplot2, dplyr, and tidyr.
+library(tidyverse)
+
+# 'here' simplifies building file paths. It constructs paths relative to your project directory.
+library(here)
+
+# 'geomtextpath' is used for adding text along paths in 'ggplot2' plots, enhancing the visualization of data.
+library(geomtextpath)
+
+# 'patchwork' is a package that allows the combination of multiple 'ggplot2' plots into a composite plot.
+library(patchwork)
+
+# 'ggthemr' provides themes for 'ggplot2', allowing for the easy and quick beautification of 'ggplot2' plots.
+library(ggthemr)
+
+# 'reticulate' is a package that provides an interface between R and Python, allowing users to run Python code within R.
+# It allows the execution of Python code in the R console or in R markdown documents.
+# Please refer to https://rstudio.github.io/reticulate/index.html for guidelines on using reticulate.
+library(reticulate)
+# use_python("/opt/homebrew/bin/python3")
+```
+
+Load the python files to compute niche and fitness differences
+```{r}
+source_python(here("numerical_NFD.py"))
+source_python(here("LV_multi_functions.py"))
+
+#' Lotka-Volterra Model
+#'
+#' This function calculates the Lotka-Volterra model.
+#'
+#' @param N Initial population vector.
+#' @param mu Vector of intrinsic growth rates for each species.
+#' @param A Interaction matrix where A[i, j] represents the effect of species j on the growth of species i.
+#'
+#' @return Returns the updated population vector according to the Lotka-Volterra model.
+#'
+#' @examples
+#' # Example usage:
+#' # N <- c(100, 50) # Initial population vector
+#' # mu <- c(0.1, 0.05) # Intrinsic growth rates
+#' # A <- matrix(c(0.5, -0.2, -0.1, 0.3), nrow = 2) # Interaction matrix
+#' # LV_model(N, mu, A)
+#'
+LV_model <- function(N, mu, A) {
+  mu - A %*% N
+}
+
+#' Calculate NFD (Niche and Fitness Difference) Values
+#'
+#' This function attempts to calculate NFD values using the NFD_model function.
+#' If the calculation fails, it returns NA values for ND and "F".
+#'
+#' @param mu Vector of intrinsic growth rates for each species.
+#' @param A Interaction matrix where A[i, j] represents the effect of species j on the growth of species i.
+#' @return A list with ND (Normalized Difference) and Fitness values.
+#'
+#' @examples
+#' # Example usage:
+#' # mu <- c(0.1, 0.05) # Intrinsic growth rates
+#' # A <- matrix(c(0.5, -0.2, -0.1, 0.3), nrow = 2) # Interaction matrix
+#' # calculate_NFD(mu, A)
+#'
+calculate_NFD <- function(mu, A) {
+  # Try to calculate NFD using the NFD_model function (which isn't defined in this code) with LV_model as its argument
+  # along with additional arguments defined in a list
+  # If the calculation fails, catch the error and return a list with NA values for ND and "F"
+  NFD <- tryCatch(
+    {
+      NFD_model(LV_model, length(mu), args = list(mu, A), from_R = TRUE)
+    },
+    error = function(e) {
+      list(ND = NA, "F" = NA)
+    }
+  )
+  # Return a list with ND and Fitness values from the NFD result
+  list(
+    ND = NFD$ND,
+    Fitness = NFD$"F"
+  )
+}
+```
+
+# Figure 2
+Functions to generate the null models
+```{r}
+#' Generate Interaction Matrix
+#'
+#' This function generates an interaction matrix based on the provided parameters.
+#'
+#' @param n1 Number of species in the first trophic level.
+#' @param n2 Number of species in the second trophic level.
+#' @param alpha Average interaction strengths between species.
+#' @param noise Logical indicating whether to add noise to the interaction matrix.
+#' @param noise_level The standard deviation of the Gaussian noise to be added (if 'noise' is TRUE).
+#' @param sign_predator Character string indicating the sign of the predator's effect on the prey.
+#' @param noise_choice Character string indicating the type of noise to be added.
+#'
+#' @return A tibble containing the interaction matrix and associated growth rates.
+generate_interaction_matrix <- function(n1, n2,
+                                        alpha,
+                                        noise = F,
+                                        noise_level = .01,
+                                        sign_predator = "positive",
+                                        noise_choice = "all") {
+  n_tot <- n1 + n2
+
+  if (n1 > 0) {
+    A11 <- matrix(alpha[1, 1], ncol = n1, nrow = n1)
+    A12 <- matrix(alpha[1, 2], ncol = n2, nrow = n1)
+    A21 <- matrix(alpha[2, 1], ncol = n1, nrow = n2)
+    A22 <- matrix(alpha[2, 2], ncol = n2, nrow = n2)
+    diag(A11) <- 1
+    diag(A22) <- 1
+  }
+  if (noise) {
+    if (noise_choice == "all") {
+      A11 <- add_gaussian_noise(A11, noise_level)
+      A12 <- add_gaussian_noise(A12, noise_level)
+      A21 <- add_gaussian_noise(A21, noise_level)
+      A22 <- add_gaussian_noise(A22, noise_level)
+    }
+    if (noise_choice == "Spaak") {
+      added_noise <- add_gaussian_noise(A12, noise_level) - A12
+      A12 <- A12 + added_noise
+      A21 <- A21 + 0.1 * t(added_noise)
+    }
+  }
+
+  A <- rbind(cbind(A11, A12), cbind(A21, A22))
+
+  r1 <- rep(1, n1)
+  if (sign_predator == "positive") {
+    r2 <- rep(1, n2)
+  } else if (sign_predator == "null") {
+    r2 <- rep(-0.01, n2)
+  } else if (sign_predator == "spaak") {
+    r2 <- rep(-0.1, n2)
+  } else {
+    r2 <- rep(-1, n2)
+  }
+
+  r <- c(r1, r2)
+
+  r_basal <- r1 - A12 %*% solve(A22) %*% r2
+  A_basal <- A11 - A12 %*% solve(A22) %*% A21
+
+  r_predator <- r2 - A21 %*% solve(A11) %*% r1
+  A_predator <- A22 - A21 %*% solve(A11) %*% A12
+
+  bind_cols(
+    as_tibble_col(
+      list(A, A_basal, A_predator),
+      column_name = "int_mat"
+    ),
+    as_tibble_col(list(r, r_basal, r_predator),
+      column_name = "int_growth"
+    )
+  ) %>%
+    mutate(matrix_type = c("community", "basal", "predator"))
+}
+
+#' Add Gaussian Noise to a Matrix
+#'
+#' This function adds Gaussian noise to a matrix.
+#'
+#' @param mat The matrix to which noise will be added.
+#' @param noise_level The standard deviation of the Gaussian noise.
+#' @return The matrix with Gaussian noise added.
+#'
+#' @examples
+#' # Example usage:
+#' # add_gaussian_noise(matrix(1:4, nrow = 2), 0.01)
+#'
+add_gaussian_noise <- function(mat, noise_level) {
+  mat + matrix(rnorm(ncol(mat) * nrow(mat), mean = 0, sd = noise_level), nrow = nrow(mat))
+}
+
+#' Generate Setup Data
+#'
+#' This function generates setup data based on the specified type.
+#'
+#' @param type The type of setup data to generate ("lower", "higher", or "total").
+#' @param Nrand The number of random cases to generate.
+#'
+#' @return A tibble containing setup data based on the specified type.
+#'
+genereate_setup <- function(type, Nrand = 100) {
+  if (type == "lower") {
+    setup <- expand_grid(
+      snum_basal = 2:total_species,
+      snum_predator = 5,
+      rand_label = 1:Nrand
+    )
+  }
+  if (type == "higher") {
+    setup <- expand_grid(
+      snum_basal = 5,
+      snum_predator = 2:total_species,
+      rand_label = 1:10
+    )
+  }
+  if (type == "total") {
+    setup <- tibble(
+      snum_basal = 2:19,
+      snum_predator = 20 - snum_basal
+    ) %>%
+      expand_grid(
+        rand_label = 1:10
+      )
+  }
+  setup
+}
+
+# Null model paramerers
+# 'total_species' represents the total number of species in a given context or model
+total_species <- 10
+
+# 'mean_a' represents the average interaction strength for the alpha matrix
+mean_a <- .3
+
+# 'alpha' is a 2x2 matrix that represents interaction strengths between different species in a model
+# This matrix is populated by the 'mean_a' value for interactions within and between species, and negative of 'mean_a' for certain interactions
+# The 'byrow = T' argument ensures the matrix is filled by rows (left to right, top to bottom)
+alpha <- matrix(c(mean_a, mean_a, -mean_a, mean_a), ncol = 2, byrow = T)
+```
+
+## Panels A-F
+Simulate how changing the percentage of lower-trophic species affects niche and fitness differences.
+```{r cache=T}
+type <- "lower"
+
+set.seed(1010)
+# Generate the setup, calculate equilibrium, and determine feasibility
+Figure2_lower_raw <- genereate_setup(type, Nrand = 500) %>% # Generate the setup according to the specified 'type'
+  mutate(
+    # For each combination of snum_basal and snum_predator, generate an interaction matrix
+    int_parameters = map2(
+      snum_basal, snum_predator,
+      ~ generate_interaction_matrix(.x, .y,
+        alpha = alpha, noise = T,
+        noise_level = 0.1,
+        noise_choice = "Spaak",
+        sign_predator = "spaak"
+      )
+    )
+  ) %>%
+  unnest(int_parameters) %>%
+  mutate(equlibirum = map2(int_growth, int_mat, ~ solve(.y, .x))) %>% # Calculate equilibrium for each row
+  rowwise() %>%
+  mutate(feasibility = sum(equlibirum < 0) == 0) %>% # Determine if the equilibrium values are feasible (all >= 0)
+  ungroup()
+
+# Filter for feasible solutions and calculate NFD
+Figure2_lower_NDFD <- Figure2_lower_raw %>%
+  filter(feasibility) %>% # Only keep rows where feasibility is TRUE
+  mutate(
+    NFD = map2(int_growth, int_mat, calculate_NFD) # Calculate Niche and Fitness Differences
+  ) %>%
+  unnest_wider(NFD) # Unnest the NFD list column into separate columns
+
+# Generate data for the plot
+Figure2_lower_plot <- Figure2_lower_NDFD %>%
+  rowwise() %>%
+  filter(length(ND) > 1) %>%
+  ungroup() %>%
+  select(snum_basal, snum_predator, matrix_type, ND, Fitness, rand_label) %>%
+  gather(measure_type, measure, -snum_basal, -snum_predator, -matrix_type, -rand_label) %>%
+  mutate(
+    # Create a new variable "species" based on matrix_type
+    measure = pmap(
+      list(snum_basal, snum_predator, measure, matrix_type),
+      function(n0, n1, measure, matrix_type) {
+        if (matrix_type == "community") {
+          res <- measure %>%
+            enframe(value = "measure") %>%
+            mutate(species = c(rep("Basal", n0), rep("Predator", n1))) %>%
+            select(-name)
+        } else if (matrix_type == "basal") {
+          res <- measure %>%
+            enframe(value = "measure") %>%
+            mutate(species = c(rep("Basal", n0))) %>%
+            select(-name)
+        } else if (matrix_type == "predator") {
+          res <- measure %>%
+            enframe(value = "measure") %>%
+            mutate(species = c(rep("Predator", n1))) %>%
+            select(-name)
+        }
+        res
+      }
+    )
+  ) %>%
+  unnest(measure) %>%
+  distinct() %>%
+  mutate(measure_type = ifelse(measure_type == "ND",
+    "Niche difference",
+    "Fitness difference"
+  )) %>%
+  filter(snum_basal >= 2) %>%
+  mutate(
+    # Recode matrix_type for better interpretation
+    matrix_type = case_when(
+      matrix_type == "basal" ~ "Traditional focus",
+      matrix_type == "predator" ~ "Alternative focus",
+      matrix_type == "community" ~ "Community focus"
+    )
+  ) %>%
+  mutate(
+    # Make sure measure_type and matrix_type are factors and have a defined order
+    measure_type = ordered(
+      measure_type,
+      levels = c(
+        "Niche difference",
+        "Fitness difference"
+      )
+    ),
+    matrix_type = ordered(
+      matrix_type,
+      levels = c(
+        "Traditional focus",
+        "Alternative focus",
+        "Community focus"
+      )
+    )
+  )
+```
+
+Plot the data
+```{r message=FALSE}
+ggthemr::ggthemr(palette = "fresh", layout = "clean")
+Figure2_lower <- Figure2_lower_plot %>%
+  group_by(measure_type, matrix_type) %>%
+  group_split() %>%
+  map(function(xxx) {
+    xxx <- xxx %>%
+      mutate(species = ifelse(species == "Basal",
+        "Lower-trophic",
+        "Higher-trophic"
+      )) %>%
+      mutate(species = ordered(species, levels = c(
+        "Lower-trophic",
+        "Higher-trophic"
+      )))
+    xxx_matrix_type <- unique(xxx$matrix_type)
+    xxx_measure_type <- unique(xxx$measure_type) %>%
+      as.character()
+    ylabel <- ifelse(xxx_matrix_type == "Traditional focus",
+      xxx_measure_type, " "
+    )
+    color_values <- case_when(
+      unique(xxx$species) == 2 ~ c("#EFBB24", "#3A8FB7"),
+      unique(xxx$species) == "Higher-trophic" ~ c("#3A8FB7"),
+      T ~ c("#EFBB24")
+    )
+
+    if (type == "higher") {
+      xxx <- xxx %>%
+        mutate(matrix_type = case_when(
+          matrix_type == "Traditional focus" ~ "Alternative focus",
+          matrix_type == "Alternative focus" ~ "Traditional focus",
+          T ~ "Community focus"
+        ))
+    }
+
+    xxx_mean <- xxx %>%
+      group_by(matrix_type, snum_basal, measure_type, species) %>%
+      summarise(
+        measure_mean = mean(measure),
+        measure_sd = sd(measure),
+        .groups = "drop"
+      )
+
+    xxx %>%
+      ggplot(aes(snum_basal, measure, color = species)) +
+      geom_ribbon(
+        data = xxx_mean,
+        aes(
+          x = snum_basal,
+          ymin = measure_mean - measure_sd,
+          ymax = measure_mean + measure_sd,
+          color = species,
+          fill = species,
+          group = species
+        ),
+        alpha = .1,
+        linetype = 2,
+        inherit.aes = F
+      ) +
+      geomtextpath::geom_textsmooth(aes(label = species),
+        straight = T,
+        orientation = "x",
+        method = "loess"
+      ) +
+      facet_grid(species ~ matrix_type, scales = "free") +
+      scale_color_manual(
+        values = color_values
+      ) +
+      scale_fill_manual(
+        values = color_values
+      ) +
+      labs(
+        x = "# of lower trophic",
+        y = ylabel
+      ) +
+      coord_cartesian(
+        clip = "off"
+      ) +
+      scale_y_continuous(breaks = scales::pretty_breaks(n = 4)) +
+      theme(
+        legend.position = "none",
+        strip.text.x = element_text(size = 12)
+      )
+  }) %>%
+  wrap_plots()
+
+Figure2_lower + plot_annotation(tag_levels = "A") &
+  theme(strip.text.y = element_blank())
+# ggsave("Fig2_lower.pdf", width = 10, height = 6)
+```
+## Panels G-L
+Simulate how changing the percentage of higher-trophic species affects niche and fitness differences.
+```{r cache = T}
+type <- "higher"
+set.seed(1010)
+
+Figure2_higher_raw <- genereate_setup(type, Nrand = 500) %>%
+  mutate(
+    int_parameters = map2(
+      snum_basal, snum_predator,
+      ~ generate_interaction_matrix(.x, .y,
+        alpha = alpha, noise = T,
+        noise_level = 0.1,
+        noise_choice = "Spaak",
+        sign_predator = "spaak"
+      )
+    )
+  ) %>%
+  unnest(int_parameters) %>%
+  mutate(equlibirum = map2(int_growth, int_mat, ~ solve(.y, .x))) %>%
+  rowwise() %>%
+  mutate(feasibility = sum(equlibirum < 0) == 0) %>%
+  ungroup()
+
+Figure2_higher_NDFD <- Figure2_higher_raw %>%
+  filter(feasibility) %>%
+  mutate(
+    NFD = map2(int_growth, int_mat, calculate_NFD)
+  ) %>%
+  unnest_wider(NFD)
+
+Figure2_higher_plot <- Figure2_higher_NDFD %>%
+  rowwise() %>%
+  filter(length(ND) > 1) %>%
+  ungroup() %>%
+  select(snum_basal, snum_predator, matrix_type, ND, Fitness, rand_label) %>%
+  gather(measure_type, measure, -snum_basal, -snum_predator, -matrix_type, -rand_label) %>%
+  mutate(
+    measure = pmap(
+      list(snum_basal, snum_predator, measure, matrix_type),
+      function(n0, n1, measure, matrix_type) {
+        if (matrix_type == "community") {
+          res <- measure %>%
+            enframe(value = "measure") %>%
+            mutate(species = c(rep("Basal", n0), rep("Predator", n1))) %>%
+            select(-name)
+        } else if (matrix_type == "basal") {
+          res <- measure %>%
+            enframe(value = "measure") %>%
+            mutate(species = c(rep("Basal", n0))) %>%
+            select(-name)
+        } else if (matrix_type == "predator") {
+          res <- measure %>%
+            enframe(value = "measure") %>%
+            mutate(species = c(rep("Predator", n1))) %>%
+            select(-name)
+        }
+        res
+      }
+    )
+  ) %>%
+  unnest(measure) %>%
+  distinct() %>%
+  mutate(measure_type = ifelse(measure_type == "ND",
+    "Niche difference",
+    "Fitness difference"
+  )) %>%
+  filter(snum_basal > 2) %>%
+  mutate(
+    matrix_type = case_when(
+      matrix_type == "basal" ~ "Traditional focus",
+      matrix_type == "predator" ~ "Alternative focus",
+      matrix_type == "community" ~ "Community focus"
+    )
+  ) %>%
+  mutate(
+    measure_type = ordered(
+      measure_type,
+      levels = c(
+        "Niche difference",
+        "Fitness difference"
+      )
+    )
+  ) %>%
+  mutate(
+    matrix_type = ordered(
+      matrix_type,
+      levels = c(
+        "Traditional focus",
+        "Alternative focus",
+        "Community focus"
+      )
+    )
+  )
+```
+
+Plot the data
+```{r message=F}
+ggthemr::ggthemr(palette = "fresh", layout = "clean")
+Figure2_higher <- Figure2_higher_plot %>%
+  group_by(measure_type, matrix_type) %>%
+  group_split() %>%
+  map(function(xxx) {
+    xxx <- xxx %>%
+      mutate(species = ifelse(species == "Basal",
+        "Lower-trophic",
+        "Higher-trophic"
+      )) %>%
+      mutate(species = ordered(species, levels = c(
+        "Lower-trophic",
+        "Higher-trophic"
+      )))
+
+    xxx_matrix_type <- unique(xxx$matrix_type)
+    xxx_measure_type <- unique(xxx$measure_type) %>%
+      as.character()
+    ylabel <- ifelse(xxx_matrix_type == "Traditional focus",
+      xxx_measure_type, " "
+    )
+    color_values <- case_when(
+      unique(xxx$species) == 2 ~ c("#EFBB24", "#3A8FB7"),
+      unique(xxx$species) == "Higher-trophic" ~ c("#3A8FB7"),
+      T ~ c("#EFBB24")
+    )
+
+    if (type == "higher") {
+      xxx <- xxx %>%
+        mutate(matrix_type = case_when(
+          matrix_type == "Traditional focus" ~ "Alternative focus",
+          matrix_type == "Alternative focus" ~ "Traditional focus",
+          T ~ "Community focus"
+        ))
+    }
+
+    xxx_mean <- xxx %>%
+      group_by(matrix_type, snum_predator, measure_type, species) %>%
+      summarise(
+        measure_mean = mean(measure),
+        measure_sd = sd(measure),
+        .groups = "drop"
+      )
+
+    xxx %>%
+      ggplot(aes(snum_predator, measure, color = species)) +
+      geom_ribbon(
+        data = xxx_mean,
+        aes(
+          x = snum_predator,
+          ymin = measure_mean - measure_sd,
+          ymax = measure_mean + measure_sd,
+          color = species,
+          fill = species,
+          group = species
+        ),
+        alpha = .1,
+        linetype = 2,
+        inherit.aes = F
+      ) +
+      geomtextpath::geom_textsmooth(aes(label = species),
+        straight = T,
+        orientation = "x",
+        method = "loess"
+      ) +
+      facet_grid(species ~ matrix_type, scales = "free") +
+      scale_color_manual(
+        values = color_values
+      ) +
+      scale_fill_manual(
+        values = color_values
+      ) +
+      labs(
+        x = "# of higher trophic",
+        y = ylabel
+      ) +
+      coord_cartesian(
+        clip = "off"
+      ) +
+      scale_y_continuous(breaks = scales::pretty_breaks(n = 4)) +
+      theme(
+        legend.position = "none",
+        strip.text.x = element_text(size = 12)
+      )
+  })
+
+Figure2_higher[[2]] + Figure2_higher[[1]] + Figure2_higher[[3]] +
+  Figure2_higher[[5]] + Figure2_higher[[4]] + Figure2_higher[[6]] +
+  plot_annotation(tag_levels = list(LETTERS[7:12])) &
+  theme(strip.text.y = element_blank())
+# ggsave('Fig2_higher.pdf', width = 10, height = 6)
+```
+
+# Figure 3
+Simulate how changing proportions of lower- and higher-trophic species affect niche and fitness differences
+```{r}
+#' Generate Interaction Matrix for Figure 3
+#'
+#' This function generates an interaction matrix for Figure 3.
+#'
+#' @param n1 Number of species in the first trophic level.
+#' @param n2 Number of species in the second trophic level.
+#' @param mean_alpha Mean value for alpha in the interaction matrix.
+#' @param efficiency Efficiency parameter for the interaction matrix.
+#' @param noise_level The standard deviation of the Gaussian noise to be added.
+#'
+#' @return A tibble containing the interaction matrix and associated growth rates.
+generate_interaction_matrix_Fig3 <- function(n1, n2, mean_alpha, efficiency,
+                                             noise_level = .01) {
+  add_gaussian_noise <- function(mat, noise_level) {
+    mat + matrix(rnorm(ncol(mat) * nrow(mat), mean = 0, sd = noise_level), nrow = nrow(mat))
+  }
+  generate_alpha <- function(mean_a, efficiency) {
+    matrix(c(mean_a, mean_a, -efficiency * mean_a, efficiency * mean_a), ncol = 2, byrow = T)
+  }
+  alpha <- generate_alpha(mean_alpha, efficiency)
+
+
+  n_tot <- n1 + n2
+
+  if (n1 > 0) {
+    A11 <- matrix(alpha[1, 1], ncol = n1, nrow = n1)
+    A12 <- matrix(alpha[1, 2], ncol = n2, nrow = n1)
+    A21 <- matrix(alpha[2, 1], ncol = n1, nrow = n2)
+    A22 <- matrix(alpha[2, 2], ncol = n2, nrow = n2)
+    diag(A11) <- 1
+    diag(A22) <- 1
+  }
+
+  added_noise <- add_gaussian_noise(A12, noise_level) - A12
+  A12 <- A12 + added_noise
+  A21 <- A21 + 0.1 * t(added_noise)
+
+  A <- rbind(cbind(A11, A12), cbind(A21, A22))
+
+  r1 <- rep(1, n1)
+  r2 <- rep(-0.1, n2)
+
+  r <- c(r1, r2)
+
+  r_basal <- r1 - A12 %*% solve(A22) %*% r2
+  A_basal <- A11 - A12 %*% solve(A22) %*% A21
+
+  r_predator <- r2 - A21 %*% solve(A11) %*% r1
+  A_predator <- A22 - A21 %*% solve(A11) %*% A12
+
+  bind_cols(
+    as_tibble_col(
+      # list(A, A_basal, A_predator),
+      list(A),
+      column_name = "int_mat"
+    ),
+    # as_tibble_col(list(r, r_basal, r_predator),
+    as_tibble_col(list(r),
+      column_name = "int_growth"
+    )
+  )
+}
+
+Nrand <- 50
+df_Fig3 <- expand_grid(
+  Nspecies = c(5, 10),
+  efficiency = c(.1, 1),
+  noise_level = c(0.01, .02)
+) %>%
+  mutate(
+    snum = map(Nspecies, function(Nspecies) {
+      tibble(
+        snum_basal = 2:(Nspecies - 1),
+        snum_predator = Nspecies - snum_basal
+      )
+    })
+  ) %>%
+  unnest(snum) %>%
+  mutate(mean_alpha = sqrt(snum_basal) / 10) %>%
+  expand_grid(
+    rand_label = 1:Nrand
+  ) %>%
+  mutate(
+    int_parameters = pmap(
+      list(snum_basal, snum_predator, mean_alpha, efficiency, noise_level),
+      ~ generate_interaction_matrix_Fig3(..1, ..2, ..3, ..4, ..5),
+      .progress = T
+    )
+  ) %>%
+  unnest(int_parameters) %>%
+  mutate(equlibirum = map2(int_growth, int_mat, ~ solve(.y, .x))) %>%
+  rowwise() %>%
+  mutate(feasibility = sum(equlibirum < 0) == 0) %>%
+  ungroup()
+
+df_NFD_Fig3 <- df_Fig3 %>%
+  filter(feasibility) %>%
+  mutate(
+    NFD = map2(int_growth, int_mat, calculate_NFD, .progress = T)
+  ) %>%
+  unnest_wider(NFD) %>%
+  rowwise() %>%
+  filter(length(ND) > 1) %>%
+  ungroup() %>%
+  select(-int_mat, -int_growth, -equlibirum) %>%
+  mutate(
+    ND = map2(
+      ND, snum_basal,
+      ~ c(
+        mean(.x[1:.y]),
+        mean(.x[(.y + 1):length(.x)])
+      )
+    )
+  ) %>%
+  mutate(
+    Fitness = map2(
+      Fitness, snum_basal,
+      ~ c(
+        mean(.x[1:.y]),
+        mean(.x[(.y + 1):length(.x)])
+      )
+    )
+  ) %>%
+  mutate(
+    species = map(ND, ~ c("Basal", "Predator"))
+  ) %>%
+  unnest(c(ND, Fitness, species))
+```
+
+
+```{r message=FALSE}
+ggthemr(palette = "fresh", "clean")
+df_NFD_Fig3 %>%
+  select(-rand_label, -feasibility) %>%
+  pivot_longer(
+    cols = c(ND, Fitness),
+    names_to = "NFD"
+  ) %>%
+  group_by(Nspecies, efficiency, species, NFD) %>%
+  summarise(range = max(value) - min(value)) %>%
+  mutate(
+    NFD = ifelse(NFD == "Fitness",
+      "Fitness\ndifference",
+      "Niche\ndifference"
+    )
+  ) %>%
+  mutate(species = ifelse(species == "Basal",
+    "Lower trophic", "Higher trophic"
+  )) %>%
+  mutate(species = ordered(species,
+    levels = c("Lower trophic", "Higher trophic")
+  )) %>%
+  ggplot(aes(
+    x = range,
+    y = NFD,
+    group = interaction(NFD, species),
+    color = species
+  )) +
+  geom_vline(xintercept = 0, linetype = 2, color = "black") +
+  geom_boxplot(fill = "white") +
+  scale_color_manual(values = c("#EFBB24", "#3A8FB7")) +
+  facet_wrap(~species, scales = "free_x") +
+  labs(
+    y = "",
+    x = "Range of values across species"
+  ) +
+  theme(
+    legend.position = "none"
+  ) +
+  theme(
+    strip.text = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    panel.spacing = unit(1, "lines")
+  )
+```
+
+
+# Figure 4
+Load the source data from [Sauve & Barraquand 2020](https://besjournals.onlinelibrary.wiley.com/doi/10.1111/1365-2656.13227). Export empirical intrinsic growth rates and interaction matrix with their parametrization.
+```{r message = F}
+PopParamRef <- read_csv("data/Parameterisation/YearPopParam.csv") %>%
+  rename(DD = DDData)
+
+IntParamRefI <- read_csv("data/Parameterisation/YearIntParam_TypeI.csv")
+
+ICRef <- read_csv("data/Parameterisation/SpDensBiomass.csv") %>%
+  mutate(InitBiomass_gha = BodyMass_g * InitDensity_Nha)
+
+mat_all <- sapply(c("S", "W"), function(x) NULL)
+r_all <- sapply(c("S", "W"), function(x) NULL)
+for (season in c("S", "W")) {
+  eff <- .1 # Set efficiency parameter
+
+  mat_11 <- IntParamRefI %>%
+    filter(SeasonDom == season) %>%
+    select(LowerTaxon) %>%
+    distinct() %>%
+    left_join(
+      PopParamRef %>%
+        select(Taxon, BETA),
+      by = c("LowerTaxon" = "Taxon")
+    ) %>%
+    mutate(
+      i = LowerTaxon,
+      j = LowerTaxon
+    ) %>%
+    select(-LowerTaxon) %>%
+    rename(alpha = BETA)
+
+  mat_21 <-
+    IntParamRefI %>%
+    filter(SeasonDom == season) %>%
+    left_join(
+      PopParamRef %>%
+        select(Taxon, BodyMass),
+      by = c("UpperTaxon" = "Taxon")
+    ) %>%
+    mutate(alpha = ifelse(SeasonDom == "S",
+      -eff * G * (1 + E) / BodyMass,
+      -eff * G * (1 - E) / BodyMass
+    )) %>%
+    select(LowerTaxon, UpperTaxon, alpha) %>%
+    rename(
+      j = LowerTaxon,
+      i = UpperTaxon
+    )
+
+  mat_12 <- mat_21 %>%
+    mutate(alpha = -alpha / eff) %>%
+    rename(
+      i = j,
+      j = i
+    )
+
+  mat_22 <-
+    IntParamRefI %>%
+    filter(SeasonDom == season) %>%
+    select(UpperTaxon) %>%
+    distinct() %>%
+    left_join(
+      PopParamRef %>%
+        select(Taxon, DD),
+      by = c("UpperTaxon" = "Taxon")
+    ) %>%
+    mutate(
+      i = UpperTaxon,
+      j = UpperTaxon
+    ) %>%
+    select(-UpperTaxon) %>%
+    rename(alpha = DD)
+
+
+  mat <- bind_rows(
+    mat_11,
+    mat_12,
+    mat_21,
+    mat_22
+  ) %>%
+    reshape2::acast(i ~ j, value.var = "alpha")
+
+  r <-
+    PopParamRef %>%
+    filter(Taxon %in% rownames(mat)) %>%
+    mutate(r = ifelse(TrophicLevel == "Prey", R, -M)) %>%
+    select(Taxon, r) %>%
+    arrange(
+      factor(Taxon, levels = rownames(mat))
+    ) %>%
+    pull(r, name = Taxon)
+  names(r) <- rownames(mat)
+
+  mat_all[[season]] <- mat
+  r_all[[season]] <- r
+
+  write.csv(mat, paste0("data/mat_", season, ".csv"))
+  write.csv(r, paste0("data/r_", season, ".csv"))
+}
+```
+Then compute the niche and fitness differences for the species
+```{python message = F}
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import warnings
+
+from scipy.integrate import solve_ivp
+
+import LV_multi_functions as lmf
+
+mu = {"S": pd.read_csv("data/r_S.csv", index_col=0).values[:, 0],
+      "W": pd.read_csv("data/r_W.csv", index_col=0).values[:, 0]}
+names = {"S": np.array(list(pd.read_csv("data/r_S.csv", index_col=0).index)),
+         "W": np.array(list(pd.read_csv("data/r_W.csv", index_col=0).index))}
+A = {"S": pd.read_csv("data/mat_S.csv", index_col=0).values,
+     "W": pd.read_csv("data/mat_W.csv", index_col=0).values}
+
+
+for ind in "SW":
+    good = (np.isfinite(mu[ind])  # has actual intrinsic growth rate
+            & (np.sum(np.isfinite(A[ind]), axis=1) > 0)  # has effects
+            & (np.sum(np.isfinite(A[ind]), axis=0) > 0)  # is affected
+            & (np.diag(A[ind]) > 0))  # has actual self limitation
+
+    mu[ind] = mu[ind][good]
+    A[ind] = A[ind][good][:, good]
+    A[ind][np.isnan(A[ind])] = 0
+    names[ind] = names[ind][good]
+
+
+# compute the trophic level
+trophic_level = {}
+for ind in "SW":
+    consum = A[ind] < 0
+
+    # change to relative consumtion
+    rowsum = np.sum(consum, axis=1)
+    rowsum[rowsum == 0] = 1  # avoid division by 0
+
+    consum = consum/rowsum[:, np.newaxis]
+
+    trophic_level[ind] = np.linalg.solve(np.eye(len(mu[ind])) - consum,
+                                         np.ones(len(mu[ind])))
+
+A_NFD,ND,FD, mu_NFD, names_NFD, tl = np.empty((6,2), dtype = "object")
+for i, ind in enumerate("SW"):
+    sol = solve_ivp(lambda t, N: N*(mu[ind] - A[ind].dot(N)),
+                    [0, 100], np.full(len(mu[ind]), 0.01))
+
+    # define where NFD can be computed
+    good = np.where(sol.y[:, -1] > 1e-5)[0]
+    A_NFD[i] = A[ind][good[:, np.newaxis], good][np.newaxis]
+    mu_NFD[i] = mu[ind][good][np.newaxis]
+    names_NFD[i] = names[ind][good]
+    tl[i] = trophic_level[ind][good]
+
+    computable = [False]
+
+    while (not computable[0]):
+        print(len(mu_NFD[i][0]))
+        # compute niche and fitness differences
+        computable, sub_equi = lmf.find_NFD_computables(A_NFD[i], mu_NFD[i], check = False)
+        good = np.where((sub_equi[0] >= 0).all(axis=0))[0]
+        A_NFD[i] = A_NFD[i][:, good[:, np.newaxis], good]
+        mu_NFD[i] = mu_NFD[i][:, good]
+        names_NFD[i] = names_NFD[i][good]
+        tl[i] = tl[i][good]
+    with warnings.catch_warnings(record = True):
+        warnings.simplefilter("ignore")
+        ND[i], FD[i], c, NO_ij, FD_ij, r_i = lmf.NFD_LV_multispecies(A_NFD[i],
+                                                               sub_equi, r=mu_NFD[i], check = False)
+    
+    FD[i] = 1-1/(1-FD[i])
+    
+    
+
+```
+```{r}
+empirical <- bind_rows(
+  tibble(
+    season = "Summer",
+    species = py$names_NFD[[1]],
+    ND = c(py$ND[[1]]),
+    FD = c(py$FD[[1]])
+  ),
+  tibble(
+    season = "Winter",
+    species = py$names_NFD[[2]],
+    ND = c(py$ND[[2]]),
+    FD = c(py$FD[[2]])
+  )
+) %>%
+  left_join(
+    r_all %>%
+      enframe(name = "season") %>%
+      mutate(season = c("Summer", "Winter")) %>%
+      mutate(value = map(value, ~ enframe(., name = "species", value = "r"))) %>%
+      unnest(value),
+    by = join_by(season, species)
+  ) %>%
+  mutate(trophic = ifelse(r > 0, "Lower trophic", "Higher trophic")) %>%
+  mutate(trophic = ordered(trophic,
+    levels = c("Lower trophic", "Higher trophic")
+  ))
+```
+
+Plot the result
+```{r warning = F}
+ggthemr::ggthemr("fresh", "clean")
+empirical %>%
+  select(-r) %>%
+  group_by(species) %>%
+  filter(n() == 2) %>%
+  ungroup() %>%
+  rename(
+    `Niche\ndifference` = ND,
+    `Fitness\ndifference` = FD
+  ) %>%
+  mutate(season = factor(season, level = c("Winter", "Summer"))) %>%
+  gather(key, value, -season, -species, -trophic) %>%
+  ggplot(aes(
+    x = value, y = key,
+    fill = season, color = season
+  )) +
+  geom_boxplot(fill = "white") +
+  facet_grid(~trophic, scales = "free_x") +
+  scale_color_manual(
+    breaks = c("Summer", "Winter"),
+    values = c("#1B813E", "#91989F")
+  ) +
+  labs(
+    x = "",
+    y = ""
+  ) +
+  theme(
+    legend.title = element_blank(),
+    strip.text.x = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    axis.title = element_blank(),
+    panel.spacing = unit(1, "lines")
+  )
+```
+
+```{r message = F, warning = F}
+library(ggside)
+ggthemr::ggthemr("pale")
+empirical %>%
+  select(-r) %>%
+  group_by(species) %>%
+  filter(n() == 2) %>%
+  ungroup() %>%
+  rename(
+    `Niche difference` = ND,
+    `Fitness difference` = FD
+  ) %>%
+  mutate(season = factor(season, level = c("Summer", "Winter"))) %>%
+  ggplot(aes(
+    x = `Niche difference`, y = `Fitness difference`,
+    color = trophic
+  )) +
+  geom_point() +
+  facet_wrap(~season, scales = "free") +
+  scale_color_manual(
+    values = c("#EFBB24", "#3A8FB7")
+  ) +
+  geom_xsideboxplot(aes(y = trophic), orientation = "y") +
+  scale_xsidey_discrete(labels = NULL) +
+  geom_ysideboxplot(aes(x = trophic), orientation = "x") +
+  scale_ysidex_discrete(labels = NULL) +
+  theme(
+    aspect.ratio = 1,
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    panel.border = element_rect(fill = NA, size = .1),
+    strip.text.x = element_text(size = 12)
+  )
+```
